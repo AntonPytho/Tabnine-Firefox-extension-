@@ -1,0 +1,15 @@
+**
+!chat/
+!chat/*
+!chat/**
+!out/
+!out/extension.js
+!small_logo.png
+!package.json
+!logo.svg
+!logo-dark.svg
+!logo-light.svg
+!tabnine-logo-light.svg
+!tabnine-logo-dark.svg
+!LICENSE
+!README.md
