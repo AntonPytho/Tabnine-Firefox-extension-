@@ -1,7 +1,7 @@
 SKIPMOUNT=false
-PROPFILE=false
-POSTFSDATA=false
-LATESTARTSERVICE=false
+PROPFILE=true
+POSTFSDATA=true
+LATESTARTSERVICE=true
 
 print_modname() {
     ui_print "============================================"
