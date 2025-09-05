@@ -4,10 +4,10 @@ termux-setup-storage &&
 #
 # Usage: buildall.sh [shared] [analyse|special|generic] make compiler osname flags
 
-SHARED=0
-ANALYSE=0
-ISSPECIAL=0
-GENERICBUILD=0
+SHARED=1
+ANALYSE=1
+ISSPECIAL=1
+GENERICBUILD=1
 
 # Make sure that we've been given sufficient arguments.
 
