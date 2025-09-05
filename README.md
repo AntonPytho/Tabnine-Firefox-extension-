@@ -1,96 +1,278 @@
-[twitter-shield]: https://img.shields.io/twitter/follow/Tabnine?style=social
-[twitter-url]: https://x.com/Tabnine
-[github-shield]: https://img.shields.io/github/stars/codota/Tabnine?style=social
-[github-url]: https://github.com/codota/TabNine
-[vscode-shield]: https://img.shields.io/visual-studio-marketplace/r/TabNine.tabnine-vscode?logo=visual-studio-code&style=social
-[vscode-url]: https://marketplace.visualstudio.com/items?itemName=TabNine.tabnine-vscode
-[youtube-shield]: https://img.shields.io/youtube/channel/views/UC3ZLFXRRmK3XbT5Oq0qPLqA?style=social
-[youtube-url]: https://www.youtube.com/@TabnineAI
+#!/bin/sh
+# Build all cryptlib modules
+#
+# Usage: buildall.sh [shared] [analyse|special|generic] make compiler osname flags
 
-[![Github Repo][github-shield]][github-url]
-[![VSCode Plugin][vscode-shield]][vscode-url]
-[![Youtube Demo Video][youtube-shield]][youtube-url]
-[![Twitter Follow][twitter-shield]][twitter-url]
-[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-908a85?logo=gitpod)](https://gitpod.io/from-referrer/)
+SHARED=1
+ANALYSE=1
+ISSPECIAL=1
+GENERICBUILD=1
 
-# Tabnine: The AI code assistant that you control
+# Make sure that we've been given sufficient arguments.
 
-Tabnine is the AI code assistant that you control — helping development teams of every size use AI to accelerate and simplify the software development process **without sacrificing privacy, security, or compliance.** Tabnine boosts engineering velocity, code quality, and developer happiness by automating the coding workflow through AI tools customized to your team. Tabnine is trusted by more than 1,000,000 developers across thousands of organizations. Learn how to [install and activate Tabnine](https://docs.tabnine.com/main/getting-started/install) and [get started](https://docs.tabnine.com/main/getting-started/quickstart).
+if [ "$1" = "shared" ] ; then
+	SHARED=1 ;
+	shift ;
+fi
+if [ "$1" = "analyse" ] ; then
+	ANALYSE=1 ;
+	shift ;
+elif [ "$1" = "special" ] ; then
+	ISSPECIAL=1 ;
+	shift ;
+elif [ "$1" = "generic" ] ; then
+	GENERICBUILD=1 ;
+	shift ;
+fi
+if [ $# -lt 4 ] ; then
+	echo "Usage: $0 [shared] [analyse|special|generic] make compiler osname flags" >&2 ;
+	exit 1 ;
+fi
 
-## Boost developer productivity with AI-powered chat and code completions
+# Juggle the args around to get them the way that we want them.
 
-Tabnine offers best-in-class AI code completion and an AI-powered chat that increases productivity and accelerates the entire software development lifecycle.
+MAKE=$1
+CC=$2
+OSNAME=$3
+shift 3
 
-## Here’s what you can do with Tabnine:
+# Additional constants from the makefile.
 
-**Plan**: Ask Tabnine general coding questions or learn how things work in your specific project and get solutions and references relevant to your workspace.
+MAJ="3"
+MIN="4"
+PLV="8"
+PROJ="cl"
+SHARED_OBJ_PATH="./shared-obj/"
+if [ "$OSNAME" = "Darwin" ] ; then
+	SLIBNAME="lib$PROJ.$MAJ.$MIN.dylib" ;
+else
+	SLIBNAME="lib$PROJ.so.$MAJ.$MIN.$PLV" ;
+fi
 
-![plan](https://github.com/codota/tabnine-vscode/assets/39899371/f9f41d1c-b39e-493c-b76c-2b5328314bfd)
+# More SunOS braindamage, deal with with Sun's totally braindamaged handling
+# of compiler installs in which cc may be either a shell script telling you
+# that there's no compiler installed, an actual compiler, or gcc.  Also, if
+# it's an actual compiler than it may be some ancient version, with a newer
+# version hidden in a large range of Sun-specific directories whose naming
+# convention changes every 1-2 versions (seriously!).  Further also,
+# although there's supposed to be a link from /opt/SUNWspro/bin to the
+# current version's /bin, it's often some ancient version that was installed
+# years ago and the link never got updated.
+#
+# To deal with this insanity we use a list of possible paths to see whether
+# there's a recent version of the Sun compiler installed, walking down
+# through older and older installs until we either find something or run out
+# of paths to search on.  Once we find a hit, we check whether it matches cc.
+# If it does then we're done.  If not, we check whether it matches
+# /opt/SUNWspro/bin and tell the user to use that.  Finally, if neither
+# match then we tell them to use the path to the newer cc that we've found.
+#
+# First we need locations of the compiler, which for the list below goes
+# back to 2005.  Note how the locations change every few versions, as does
+# the software name: SPARCworks, SunSoft Workshop, Forte Developer, Sun ONE
+# Studio, Sun Studio, Oracle Solaris Studio, and Oracle Developer Suite.
+#
+# Note also that the 12.7 entry is speculative for the next release, it
+# didn't change from 12.5 to 12.6 so it's due for a change again.
 
-**Create**: Generate new code using natural language. As you continue coding, Tabnine provides inline code completions, offering real-time, context-aware suggestions that seamlessly blend with your coding style.
+SUNCCPATHS="/opt/developerstudio12.7/bin/cc /opt/developerstudio12.6/bin/cc \
+/opt/developerstudio12.5/bin/cc /opt/solarisstudio12.4/bin/cc \
+/opt/solarisstudio12.3/bin/cc /opt/solstudio12.2/bin/cc \
+/opt/studio/sunstudio12.1/bin/cc /opt/sunstudio12/bin/cc \
+/opt/sunstudio11/SUNWspro/bin/cc /opt/sunstudio10/SUNWspro/bin/cc"
+SUNCC=0
 
-![create](https://github.com/codota/tabnine-vscode/assets/39899371/bc0f80cc-2208-4453-8177-251c91623c68)
+checkSunCompilerVersion()
+	{
+	CC=$1
+	SUNCCPATH=$2
+	SUNWSSTRING=""
 
-**Test**: Ask Tabnine to create tests for a specific function or code in your project, and get back the actual test cases, implementation, and assertion. Tabnine can also use existing tests in your project and suggest tests that align with your project’s testing framework.
+	# Get the compiler version info for each of the three possible locations
+	# where a compiler could be hidden.  Note the use of backticks rather
+	# than "$(...)", this is required by Sun's antediluvian tools.
+	# shellcheck disable=SC2006
+	CCSTRING=`$CC -V 2>&1 | grep "Sun C"`
+	# shellcheck disable=SC2006 # Antediluvian Sun tools.
+	SUNCCSTRING=`$SUNCCPATH -V 2>&1 | grep "Sun C"`
+	if [ -f /opt/SUNWspro/bin/cc ] ; then
+		# shellcheck disable=SC2006 # Antediluvian Sun tools.
+		SUNWSSTRING=`/opt/SUNWspro/bin/cc -V 2>&1 | grep "Sun C"` ;
+	fi
 
-![test](https://github.com/codota/tabnine-vscode/assets/39899371/0ac12b99-e34c-483a-9d08-06aea50513d8)
+	# If $CC is the latest version, we're done.
+	if [ "$SUNCCSTRING" = "$CCSTRING" ] ; then
+		SUNCC=1 ;
+		return ;
+	fi
 
-**Fix**: When tests fail, you can select code with an error and ask Tabnine for recommendations on how to fix it.
+	# $CC isn't the latest version, tell the user that they need to
+	# explicitly enable use of a newer version.
+	if [ "$SUNCCSTRING" = "$SUNWSSTRING" ] ; then
+		echo "Sun Workshop compiler detected at /opt/SUNWspro/bin/cc but it's more recent" >&2 ;
+		echo "than $CC, rerun make with the path set to point to the compiler directories" >&2 ;
+		echo "at /opt/SUNWspro/bin." >&2 ;
+	else
+		echo "Sun Workshop compiler detected but it's not in the path, rerun make with the" >&2 ;
+		# shellcheck disable=SC2006 # Antediluvian Sun tools.
+		echo "path set to point to the compiler directories at "`dirname $SUNCCPATH`"." >&2 ;
+	fi
+	exit 1;
+	}
 
-![fix](https://github.com/codota/tabnine-vscode/assets/39899371/7cc99521-09d7-4924-b505-cab46c0f4f17)
+if [ "$OSNAME" = "SunOS" ] ; then
+	for sunccpath in $SUNCCPATHS ; do
+		if [ -f $sunccpath ] ; then
+			checkSunCompilerVersion $CC $sunccpath ;
+			break ;
+		fi
+	done
+	if [ $SUNCC -eq 0 ] && [ "$($CC -v 2>&1 | grep -c "gcc")" -gt 0 ] ; then
+		echo "Sun compiler not detected but gcc is present, using that instead." >&2 ;
+	fi
+fi
 
-**Document**: Generate documentation for specific sections of your code to enhance readability and make it easy for other team members to understand.
+# Get the compiler that we'll be using.  This takes the given $CC and
+# substitutes are more preferred one if available, unless $CC is a custom
+# compiler like a static source code analyser or fuzzer build.  However for
+# the gcc analysis build the compiler is standard gcc so we have to keep
+# that to make sure we don't get overridden with the more preferred (less
+# buggy) clang.
+#
+# Note though the comment in tools/ccopts.sh about this producing nothing
+# but huge amounts of FPs, it's left in here in case it's ever useful in
+# the future.  Otherwise, ccopts only enables it for one specific
+# development system to avoid drowning in noise.
 
-![document](https://github.com/codota/tabnine-vscode/assets/39899371/9e2164b1-073a-4f75-87e6-08795d911a3d)
+if [ $ANALYSE -le 0 ] || [ "$CC" != "gcc" ] ; then
+	if [ "$OSNAME" = "SunOS" ] ; then
+		# shellcheck disable=SC2006 # Antediluvian Sun tools.
+		CC=`./tools/getcompiler.sh $CC $OSNAME` ;
+	else
+		CC="$(./tools/getcompiler.sh $CC $OSNAME)" ;
+	fi
+fi
 
-**Explain**: Tabnine Chat can provide you with an explanation for a block of existing code, which is especially useful when reading a new codebase or reading legacy code in languages you don’t know as well.
+# OS X Snow Leopard broke dlopen(), if it's called from a (sub-)thread then it
+# dies with a SIGTRAP.  Specifically, if you dlopen() a shared library linked
+# with CoreFoundation from a thread and the calling app wasn't linked with
+# CoreFoundation then the function CFInitialize() inside dlopen() checks if
+# the thread is the main thread and if it isn't it crashes with a SIGTRAP.
+#
+# This is now handled in cryptlib.c by disabling asynchronous driver binding,
+# the following check is left here in case this isn't sufficient.
+#
+#if [ $OSNAME = "Darwin" -a $(sw_vers -productVersion | grep -c "10\.6") -gt 0 ] ; then
+#	echo "This version of OS X Snow Leopard may have a buggy dlopen() that crashes" ;
+#	echo "with a SIGTRAP when called from a thread.  If the cryptlib self-test dies" ;
+#	echo "with the message 'Trace/BPT trap' then add:" ;
+#	echo "" ;
+#	echo "  #undef USE_THREADS" ;
+#	echo "" ;
+#	echo "at around line 40 of cryptlib.c and rebuild.  Note that this will disable" ;
+#	echo "the use of asynchronous driver binding, which may make startups a little" ;
+#	echo "slower." ;
+#	echo "" ;
+#fi
 
-![explain](https://github.com/codota/tabnine-vscode/assets/39899371/94507d89-057e-45fc-b0d2-e053139a9de2)
+# Detect various broken versions of gcc
 
-**Maintain**: In addition to writing new code, Tabnine can help you change the existing code by adding functionality, refactoring, or fixing specific code.
+if [ "$($CC -v 2>&1 | grep -c "gcc")" -gt 0 ] ; then
 
-![maintain](https://github.com/codota/tabnine-vscode/assets/39899371/b446f314-33ef-403c-aa71-6ab787eacb9c)
+  # Older OS X boxes shipped with an incredibly buggy Apple-hacked version of
+  # gcc 4.0.1.2, cryptlib contains some workarounds for this but other bugs
+  # are too difficult to track down, so we have to declare it to be an
+  # unsupported environment.
 
-#### Tabnine supports most popular languages, frameworks, and IDEs.
+  if [ "$OSNAME" = "Darwin" ] && [ "$($CC -dumpversion | grep -c "4\.0\.1")" -gt 0 ] ; then
+	echo "This version of OS X ships with an extremely buggy, Apple-hacked version of" ;
+	echo "gcc 4.x that's more than a decade out of date.  Please upgrade to a newer " ;
+	echo "compiler to build cryptlib." ;
+	exit 1 ;
+  fi
 
-**Supported languages, frameworks, and libraries:** JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Php, Ruby, Kotlin, Dart, Rust, React/Vue, HTML 5, CSS, Lua, Perl, YAML, Cuda, SQL, Scala, Shell (bash), Swift, R, Julia, VB, Groovy, Matlab, Terraform, ABAP.  
-[Learn more](https://docs.tabnine.com/main/welcome/readme/supported-languages)
+  # Slowaris 11 similarly shipped with a buggy version of gcc 4.8 (described
+  # as "pretty much messed up at this point" in
+  # https://mail-index.netbsd.org/pkgsrc-users/2014/08/27/msg020283.html) so
+  # we similarly have to declare it to be an unsupported environment.
 
-**Supported IDEs:** VS Code, JetBrains IDEs (IntelliJ, PyCharm, WebStorm, PhpStorm, Android Studio, GoLand, CLion, Rider, DataGrip, RustRover, RubyMine, DataSpell, Aqua, AppCode), Eclipse, Visual Studio 2022.  
-[Learn more](https://docs.tabnine.com/main/welcome/readme/supported-ides)
+  if [ "$OSNAME" = "SunOS" ] && [ "$($CC -dumpversion | grep -c "4\.8")" -gt 0 ] ; then
+	echo "This version of Solaris ships with a buggy version of gcc 4.8 that produces" ;
+	echo "broken builds due to stack smashing protection (SSP) options being messed" ;
+	echo "up.  Please upgrade to a newer compiler, or even just something other than" ;
+	echo "gcc 4.6 or 4.8, to build cryptlib." ;
+	exit 1 ;
+  fi
 
-#### The AI code assistant that you control
+fi
 
-Unlike generic code assistants, **Tabnine is:**
+# Unicos has a broken uname so we override detection.
 
-- **Private:** You choose where and how to deploy Tabnine, either as a secure SaaS offering or self-hosted on-premises or in a VPC). We never store your data or share it with any third party. Additionally, we don’t use your data to train our models. This ensures complete privacy and maximizes control over your intellectual property.
+if [ "$(uname -m | cut -c 1-4)" = 'CRAY' ] ; then
+	OSNAME="CRAY" ;
+fi
 
-- **Personalized:** Tabnine delivers an optimized experience for each developer and engineering team. You can increase Tabnine's contextual awareness by making it aware of your environment — from a developer’s local IDE to the entire codebase — and receive highly personalized results for code completions, explanations, and documentation. Tabnine enterprise customers can further enrich the capability and quality of the output by creating a bespoke model that’s trained on their codebase.
+# Get the compiler flags for the compiler and the OS version and make sure
+# that we got a valid result.  This check is necessary because sometimes
+# problems (typically sh bugs on some OSes) cause the script to bail out
+# without producing any output.  Since the resulting CFLAGS string is empty,
+# we add an extra character to the comparison string to avoid syntax errors.
 
-- **Protected:** Tabnine is built with enterprise-grade security and compliance at its core. It’s trained exclusively on open source code with permissive licenses, ensuring that you’re never exposed to legal liability.
+if [ $ANALYSE -gt 0 ] ; then
+	CFLAGS="$(./tools/ccopts.sh analyse $CC $OSNAME)" ;
+elif [ $ISSPECIAL -gt 0 ] ; then
+	CFLAGS="$(./tools/ccopts.sh special $CC $OSNAME)" ;
+elif [ $GENERICBUILD -gt 0 ] ; then
+	CFLAGS="$(./tools/ccopts.sh generic $CC $OSNAME)" ;
+elif [ $SHARED -gt 0 ] ; then
+	CFLAGS="$(./tools/ccopts.sh shared $CC $OSNAME)" ;
+else
+	if [ "$OSNAME" = "SunOS" ] ; then
+		# shellcheck disable=SC2006 # Antediluvian Sun tools.
+		CFLAGS=`./tools/ccopts.sh $CC $OSNAME` ;
+	else
+		CFLAGS="$(./tools/ccopts.sh $CC $OSNAME)" ;
+	fi ;
+fi
+# shellcheck disable=SC2050 # "'x' expression is constant".
+if [ '$(CFLAGS)x' = 'x' ] ; then
+	echo "$0: Couldn't get compiler flags via tools/ccopts.sh." >&2 ;
+	exit 1 ;
+fi
 
-#### Key resources:
+if [ "$OSNAME" = "SunOS" ] ; then
+	# shellcheck disable=SC2006 # Antediluvian Sun tools.
+	OSVERSION=`./tools/osversion.sh $OSNAME` ;
+else
+	OSVERSION="$(./tools/osversion.sh $OSNAME)" ;
+fi
+if [ -z "$OSVERSION" ] || \
+   [ "$(echo $OSVERSION | grep -c '[^0-9]')" -gt 0 ] ; then
+	echo "$0: Couldn't correctly determine OS version string '$OSVERSION'." >&2 ;
+	exit 1 ;
+fi
 
-- [Documentation](https://docs.tabnine.com/main)
-- [Free 90 day trial](https://app.tabnine.com/checkout/account-info?source=account-info)
-- [Plans and Pricing](https://www.tabnine.com/pricing/)
-- [Get Support](https://www.tabnine.com/contact-us/)
-- [Extension for Tabnine Enterprise self-hosted setup](https://marketplace.visualstudio.com/items?itemName=TabNine.tabnine-vscode-self-hosted-updater)
+# Check whether we're doing a cross-compile and provide an early-out for
+# this special case.  Since $CROSSCOMPILE is usually a null value we add an
+# extra character to the comparison string to avoid syntax errors.
 
-#### Latest product updates
+# shellcheck disable=SC2050 # "'x' expression is constant".
+if [ '$(CROSSCOMPILE)x' = '1x' ] ; then
+	echo "Cross-compiling for OS target $OSNAME" ;
+	CFLAGS="$* $(./tools/ccopts-crosscompile.sh $CC $OSNAME) \
+			-DOSVERSION=$(./tools/osversion.sh $OSNAME)" ;
+	if [ $SHARED -gt 0 ] ; then
+		$MAKE TARGET="$SLIBNAME" OBJPATH="$SHARED_OBJ_PATH" "$CFLAGS" "$OSNAME" ;
+	else
+		$MAKE "$CFLAGS" "$OSNAME" ;
+	fi ;
+fi
 
-Introducing real time switchable AI models for Tabnine Chat. Choose from a wide range of models: two custom-built, fully private models from Tabnine, plus popular LLMs from third parties such as Command R from Cohere, Claude 3.5 Sonnet from Anthropic, Codestral from Mistral, GPT-4o, GPT-4.0 Turbo, and GPT-3.5 Turbo from OpenAI. [Learn more](https://www.tabnine.com/blog/introducing-switchable-models-for-tabnine-chat/)
+# Build cryptlib.
 
-![switchable-models](https://www.tabnine.com/wp-content/uploads/2024/04/llm_post-1.png)
-
-#### **Recommended by developers everywhere:**
-
-<img src="https://update.tabnine.com/public-marketplace-resources/testimonial-1.png" alt="Testimonial 1" width="50%">
-
-<img src="https://update.tabnine.com/public-marketplace-resources/testimonial-2.png" alt="Testimonial 2" width="50%">
-
-<img src="https://update.tabnine.com/public-marketplace-resources/testimonial-3.png" alt="Testimonial 3" width="50%">
-
-<img src="https://update.tabnine.com/public-marketplace-resources/testimonial-4.png" alt="Testimonial 4" width="50%">
-
-<img src="https://update.tabnine.com/public-marketplace-resources/testimonial-5.png" alt="Testimonial 5" width="50%">
+if [ $SHARED -gt 0 ] ; then
+	$MAKE CC="$CC" LD="$CC" TARGET="$SLIBNAME" OBJPATH="$SHARED_OBJ_PATH" \
+		  CFLAGS="$* $CFLAGS -DOSVERSION=$OSVERSION" "$OSNAME" ;
+else
+	$MAKE CC="$CC" LD="$CC" CFLAGS="$* $CFLAGS -DOSVERSION=$OSVERSION" "$OSNAME" ;
+fi
